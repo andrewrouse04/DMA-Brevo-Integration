@@ -4,11 +4,13 @@
  * Settings page rendered inside the Stripe Dashboard. A DMA exec can:
  *   1. Paste their Brevo API key (stored in Stripe Secret Store — never leaves Stripe's infra).
  *   2. Enter the Brevo list ID that new members should be added to.
- *   3. Pick which Stripe Price(s) count as a "membership" purchase.
+ *   3. Pick which Stripe Products trigger the Brevo sync — all prices under a
+ *      ticked product are included automatically, so adding a new annual
+ *      membership product next year is just one checkbox, no code needed.
  *   4. Test the Brevo connection with a single button click.
  *
  * The backend Cloudflare Worker reads these secrets at webhook-handling time,
- * so the exec only needs to configure this once.
+ * so the exec only needs to configure this once (and re-visit when adding products).
  */
 
 import {
@@ -33,20 +35,19 @@ import { useSecretStore } from "@stripe/ui-extension-sdk/secrets";
 // Secret keys used in the Stripe Secret Store
 const SECRET_BREVO_API_KEY = "brevo_api_key";
 const SECRET_BREVO_LIST_ID = "brevo_list_id";
-// Comma-separated list of Stripe Price IDs that should trigger a Brevo sync,
-// e.g. "price_abc,price_def". Stored as a single secret so execs can add new
-// products (event tickets, etc.) from the settings page without touching code.
-const SECRET_MEMBERSHIP_PRICE_IDS = "membership_price_ids";
+// Comma-separated Stripe Product IDs whose purchases trigger a Brevo sync,
+// e.g. "prod_abc,prod_def". Stored at the product level so every price under
+// a ticked product is included — no code change needed when adding new products.
+const SECRET_MEMBERSHIP_PRODUCT_IDS = "membership_product_ids";
 
 const stripe = new Stripe(STRIPE_API_KEY, {
   httpClient: createHttpClient(),
   apiVersion: "2023-10-16",
 });
 
-// Shape of a price option shown in the selector
-interface PriceOption {
-  value: string; // Stripe Price ID
-  label: string; // e.g. "DMA Membership — $20.00"
+interface ProductOption {
+  value: string; // Stripe Product ID
+  label: string; // e.g. "DMA Membership 2025"
 }
 
 export default function AppSettings({ userContext }: ExtensionContextValue) {
@@ -56,13 +57,13 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
   // ── Local state ───────────────────────────────────────────────────────────
   const [brevoApiKey, setBrevoApiKey] = useState("");
   const [brevoListId, setBrevoListId] = useState("");
-  // Set of Price IDs the exec has ticked — stored as a comma-separated secret
-  const [selectedPriceIds, setSelectedPriceIds] = useState<Set<string>>(new Set());
-  const [priceOptions, setPriceOptions] = useState<PriceOption[]>([]);
+  // Set of Product IDs the exec has ticked — stored as a comma-separated secret
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
 
   // UI state
   const [loadingSecrets, setLoadingSecrets] = useState(true);
-  const [loadingPrices, setLoadingPrices] = useState(true);
+  const [loadingProducts, setLoadingProducts] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saved" | "error">("idle");
@@ -72,17 +73,17 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
   // ── Load saved secrets on mount ───────────────────────────────────────────
   useEffect(() => {
     async function loadSecrets() {
-      const [key, listId, priceIds] = await Promise.all([
+      const [key, listId, productIds] = await Promise.all([
         getSecret(SECRET_BREVO_API_KEY),
         getSecret(SECRET_BREVO_LIST_ID),
-        getSecret(SECRET_MEMBERSHIP_PRICE_IDS),
+        getSecret(SECRET_MEMBERSHIP_PRODUCT_IDS),
       ]);
       // Mask the API key — show placeholder stars if one is already saved
       if (key) setBrevoApiKey("••••••••••••••••");
       if (listId) setBrevoListId(listId);
-      if (priceIds) {
-        setSelectedPriceIds(
-          new Set(priceIds.split(",").map((id) => id.trim()).filter(Boolean))
+      if (productIds) {
+        setSelectedProductIds(
+          new Set(productIds.split(",").map((id) => id.trim()).filter(Boolean))
         );
       }
       setLoadingSecrets(false);
@@ -90,46 +91,29 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
     loadSecrets();
   }, [getSecret]);
 
-  // ── Load Stripe prices on mount ───────────────────────────────────────────
+  // ── Load Stripe products on mount ─────────────────────────────────────────
   useEffect(() => {
-    async function loadPrices() {
+    async function loadProducts() {
       try {
-        // Fetch active one-time prices and expand the product for a readable label
-        const prices = await stripe.prices.list({
-          type: "one_time",
-          active: true,
-          expand: ["data.product"],
-          limit: 100,
-        });
+        // Only show active products — archived ones won't accept new purchases
+        const products = await stripe.products.list({ active: true, limit: 100 });
 
-        const options: PriceOption[] = prices.data.map((price) => {
-          const product =
-            typeof price.product === "object" && price.product !== null
-              ? (price.product as Stripe.Product)
-              : null;
-          const productName = product?.name ?? "Unknown product";
-          const amount =
-            price.unit_amount !== null && price.unit_amount !== undefined
-              ? new Intl.NumberFormat("en-CA", {
-                  style: "currency",
-                  currency: price.currency.toUpperCase(),
-                }).format(price.unit_amount / 100)
-              : "";
-          return {
-            value: price.id,
-            label: amount ? `${productName} — ${amount}` : productName,
-          };
-        });
+        const options: ProductOption[] = products.data.map((product) => ({
+          value: product.id,
+          label: product.name,
+        }));
 
-        setPriceOptions(options);
+        // Sort alphabetically so the list is easy to scan
+        options.sort((a, b) => a.label.localeCompare(b.label));
+        setProductOptions(options);
       } catch (_err) {
-        // Non-fatal — exec can still type the price ID manually
-        setPriceOptions([]);
+        // Non-fatal — exec can paste the product ID manually
+        setProductOptions([]);
       } finally {
-        setLoadingPrices(false);
+        setLoadingProducts(false);
       }
     }
-    loadPrices();
+    loadProducts();
   }, []);
 
   // ── Save handler ──────────────────────────────────────────────────────────
@@ -144,8 +128,10 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
         saves.push(setSecret(SECRET_BREVO_API_KEY, brevoApiKey));
       }
       if (brevoListId) saves.push(setSecret(SECRET_BREVO_LIST_ID, brevoListId));
-      if (selectedPriceIds.size > 0) {
-        saves.push(setSecret(SECRET_MEMBERSHIP_PRICE_IDS, [...selectedPriceIds].join(",")));
+      if (selectedProductIds.size > 0) {
+        saves.push(
+          setSecret(SECRET_MEMBERSHIP_PRODUCT_IDS, [...selectedProductIds].join(","))
+        );
       }
 
       await Promise.all(saves);
@@ -155,7 +141,7 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
     } finally {
       setSaving(false);
     }
-  }, [brevoApiKey, brevoListId, selectedPriceIds, setSecret]);
+  }, [brevoApiKey, brevoListId, selectedProductIds, setSecret]);
 
   // ── Test connection handler ───────────────────────────────────────────────
   const handleTest = useCallback(async () => {
@@ -245,11 +231,7 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
 
         {/* Test connection button */}
         <Inline css={{ marginTop: "small", gap: "small", alignY: "center" }}>
-          <Button
-            type="secondary"
-            onPress={handleTest}
-            disabled={testing}
-          >
+          <Button type="secondary" onPress={handleTest} disabled={testing}>
             {testing ? <Spinner size="small" /> : "Test connection"}
           </Button>
           {testStatus === "ok" && (
@@ -269,22 +251,22 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
 
       <Divider />
 
-      {/* ── Synced prices ── */}
+      {/* ── Membership products ── */}
       <FormFieldGroup
-        legend="Purchases that sync to Brevo"
-        description="Tick every price that should add someone to your Brevo members list — your annual membership now, event tickets later. Only one-time prices are shown."
+        legend="Membership products"
+        description="Tick every Stripe product whose purchase should add someone to your Brevo list. All prices under a ticked product are included — so when you create next year's membership product, just come back here and tick it."
       >
-        {loadingPrices ? (
+        {loadingProducts ? (
           <Spinner size="small" />
-        ) : priceOptions.length > 0 ? (
+        ) : productOptions.length > 0 ? (
           <Box css={{ stack: "y", gap: "small" }}>
-            {priceOptions.map((opt) => (
+            {productOptions.map((opt) => (
               <Checkbox
                 key={opt.value}
                 label={opt.label}
-                checked={selectedPriceIds.has(opt.value)}
+                checked={selectedProductIds.has(opt.value)}
                 onChange={(e) => {
-                  setSelectedPriceIds((prev) => {
+                  setSelectedProductIds((prev) => {
                     const next = new Set(prev);
                     if (e.target.checked) {
                       next.add(opt.value);
@@ -300,18 +282,18 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
           </Box>
         ) : (
           <TextField
-            label="Price IDs (comma-separated)"
-            placeholder="price_abc, price_def"
-            value={[...selectedPriceIds].join(", ")}
+            label="Product IDs (comma-separated)"
+            placeholder="prod_abc, prod_def"
+            value={[...selectedProductIds].join(", ")}
             onChange={(e) => {
               const ids = e.target.value
                 .split(",")
                 .map((id) => id.trim())
                 .filter(Boolean);
-              setSelectedPriceIds(new Set(ids));
+              setSelectedProductIds(new Set(ids));
               setSaveStatus("idle");
             }}
-            description="No active one-time prices found — paste one or more Price IDs from your Stripe Dashboard, separated by commas."
+            description="No active products found — paste one or more Product IDs from your Stripe Dashboard, separated by commas."
           />
         )}
       </FormFieldGroup>
@@ -338,11 +320,7 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
       </Inline>
 
       <Box css={{ marginTop: "large" }}>
-        <Link
-          href="https://app.brevo.com"
-          target="_blank"
-          type="secondary"
-        >
+        <Link href="https://app.brevo.com" target="_blank" type="secondary">
           Open Brevo dashboard ↗
         </Link>
       </Box>

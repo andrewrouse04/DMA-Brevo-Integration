@@ -8,8 +8,9 @@ compatibility_date = "2024-01-01"
 #   STRIPE_SECRET_KEY       — your Stripe secret key (for Secret Store reads)
 #   BREVO_API_KEY           — Brevo API key (can also be read from Stripe Secret Store)
 #   BREVO_LIST_ID           — numeric Brevo list ID
-#   MEMBERSHIP_PRICE_IDS    — comma-separated Stripe Price IDs that trigger a sync
-#                             e.g. "price_abc,price_def" — set via the Stripe App settings page
+#   MEMBERSHIP_PRODUCT_IDS  — comma-separated Stripe Product IDs that trigger a sync
+#                             e.g. "prod_abc,prod_def" — set via the Stripe App settings page
+#                             all prices under a configured product are matched automatically
 
 [vars]
 # Non-secret runtime config goes here (currently none needed)

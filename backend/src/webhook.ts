@@ -22,9 +22,10 @@ export interface WebhookEnv {
   STRIPE_WEBHOOK_SECRET: string;
   BREVO_API_KEY: string;
   BREVO_LIST_ID: string;
-  // Comma-separated Price IDs configured via the settings page,
-  // e.g. "price_abc,price_def". Add new products there — no code change needed.
-  MEMBERSHIP_PRICE_IDS: string;
+  // Comma-separated Product IDs configured via the settings page,
+  // e.g. "prod_abc,prod_def". Every price under a ticked product is included
+  // automatically — add new annual membership products there, no code change needed.
+  MEMBERSHIP_PRODUCT_IDS: string;
 }
 
 /**
@@ -69,16 +70,16 @@ export async function handleWebhook(
 
   const session = event.data.object as Stripe.Checkout.Session;
 
-  // ── 4. Check this session includes a configured price ────────────────────
+  // ── 4. Check this session includes a price from a configured product ─────
   // Parse the comma-separated list into a Set for O(1) lookups.
-  const allowedPriceIds = new Set(
-    env.MEMBERSHIP_PRICE_IDS.split(",").map((id) => id.trim()).filter(Boolean)
+  const allowedProductIds = new Set(
+    env.MEMBERSHIP_PRODUCT_IDS.split(",").map((id) => id.trim()).filter(Boolean)
   );
 
-  const isSyncedPurchase = sessionIncludesAllowedPrice(session, allowedPriceIds);
+  const isSyncedPurchase = sessionIncludesAllowedProduct(session, allowedProductIds);
 
   if (!isSyncedPurchase) {
-    // This checkout didn't include any of our configured prices — skip it.
+    // This checkout didn't include any price from our configured products — skip it.
     return new Response("Not a synced purchase", { status: 200 });
   }
 
@@ -127,20 +128,24 @@ export async function handleWebhook(
 
 /**
  * Returns true if the checkout session contains at least one line item whose
- * Price ID appears in `allowedPriceIds`.
+ * price belongs to a product in `allowedProductIds`.
+ *
+ * Matching at the product level means all prices under a configured product
+ * (e.g. different price points or currencies for the same membership) are
+ * included automatically without any settings change.
  *
  * Requires line items to be expanded on the session object. Configure your
- * Stripe Checkout session creation with `expand: ["line_items"]` so this
- * check is always reliable — without expansion we skip the session rather
- * than guess, preventing event-ticket buyers from landing on the members list.
+ * Stripe Checkout session creation with `expand: ["line_items"]` — without
+ * expansion we skip the session rather than guess, which prevents event-ticket
+ * buyers from landing on the members list.
  */
-function sessionIncludesAllowedPrice(
+function sessionIncludesAllowedProduct(
   session: Stripe.Checkout.Session,
-  allowedPriceIds: Set<string>
+  allowedProductIds: Set<string>
 ): boolean {
   // Fast path: metadata explicitly set by the checkout creation call
-  const metaPriceId = session.metadata?.membership_price_id;
-  if (metaPriceId && allowedPriceIds.has(metaPriceId)) {
+  const metaProductId = session.metadata?.membership_product_id;
+  if (metaProductId && allowedProductIds.has(metaProductId)) {
     return true;
   }
 
@@ -150,7 +155,7 @@ function sessionIncludesAllowedPrice(
 
   if (!lineItems?.data) {
     // Line items not expanded — skip rather than assume. Configure Stripe
-    // Checkout to expand line_items or pass metadata.membership_price_id.
+    // Checkout to expand line_items or pass metadata.membership_product_id.
     console.warn(
       "Line items not expanded on session — skipping Brevo sync to avoid false positives.",
       { sessionId: session.id }
@@ -159,9 +164,13 @@ function sessionIncludesAllowedPrice(
   }
 
   return lineItems.data.some((item) => {
-    const priceId =
-      typeof item.price === "string" ? item.price : item.price?.id;
-    return priceId !== undefined && allowedPriceIds.has(priceId);
+    // price.product is always a string ID when line_items are expanded but
+    // price.product is not further expanded — which is the expected case.
+    const productId =
+      typeof item.price?.product === "string"
+        ? item.price.product
+        : item.price?.product?.id;
+    return productId !== undefined && allowedProductIds.has(productId);
   });
 }
 
