@@ -1,0 +1,17 @@
+{
+  "name": "dma-brevo-integration",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "start": "stripe apps start",
+    "build": "stripe apps build",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@stripe/ui-extension-sdk": "^0.0.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.0.0",
+    "typescript": "^5.0.0"
+  }
+}

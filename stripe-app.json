@@ -1,0 +1,39 @@
+{
+  "id": "com.dma.brevo-integration",
+  "version": "0.0.1",
+  "name": "DMA Brevo Integration",
+  "icon": "",
+  "permissions": [
+    {
+      "permission": "customer_read",
+      "purpose": "Read buyer email and name from a completed checkout to sync to Brevo"
+    },
+    {
+      "permission": "checkout_session_read",
+      "purpose": "Read completed checkout sessions to identify membership purchases"
+    },
+    {
+      "permission": "product_read",
+      "purpose": "Populate the membership product/price selector on the settings page"
+    },
+    {
+      "permission": "secret_read",
+      "purpose": "Read Brevo API key and list ID from the Stripe Secret Store"
+    },
+    {
+      "permission": "secret_write",
+      "purpose": "Save Brevo API key and list ID from the settings page"
+    }
+  ],
+  "ui_extensions": [
+    {
+      "template": "settings-page",
+      "src": "src/views/AppSettings.tsx",
+      "targets": ["settings"]
+    }
+  ],
+  "post_install_action": {
+    "type": "settings"
+  },
+  "allowed_redirect_uris": []
+}

@@ -1,0 +1,14 @@
+name = "dma-brevo-integration"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Secrets are set via `wrangler secret put` — never commit real values here.
+# Required secrets:
+#   STRIPE_WEBHOOK_SECRET   — from `stripe listen --forward-to ...` or Stripe Dashboard
+#   STRIPE_SECRET_KEY       — your Stripe secret key (for Secret Store reads)
+#   BREVO_API_KEY           — Brevo API key (can also be read from Stripe Secret Store)
+#   BREVO_LIST_ID           — numeric Brevo list ID
+#   MEMBERSHIP_PRICE_ID     — Stripe Price ID that counts as a membership
+
+[vars]
+# Non-secret runtime config goes here (currently none needed)
