@@ -14,12 +14,12 @@
 import {
   Box,
   Button,
+  Checkbox,
   Divider,
   FormFieldGroup,
   Icon,
   Inline,
   Link,
-  Select,
   Spinner,
   TextField,
   ContextView,
@@ -33,7 +33,10 @@ import { useSecretStore } from "@stripe/ui-extension-sdk/secrets";
 // Secret keys used in the Stripe Secret Store
 const SECRET_BREVO_API_KEY = "brevo_api_key";
 const SECRET_BREVO_LIST_ID = "brevo_list_id";
-const SECRET_MEMBERSHIP_PRICE_ID = "membership_price_id";
+// Comma-separated list of Stripe Price IDs that should trigger a Brevo sync,
+// e.g. "price_abc,price_def". Stored as a single secret so execs can add new
+// products (event tickets, etc.) from the settings page without touching code.
+const SECRET_MEMBERSHIP_PRICE_IDS = "membership_price_ids";
 
 const stripe = new Stripe(STRIPE_API_KEY, {
   httpClient: createHttpClient(),
@@ -53,7 +56,8 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
   // ── Local state ───────────────────────────────────────────────────────────
   const [brevoApiKey, setBrevoApiKey] = useState("");
   const [brevoListId, setBrevoListId] = useState("");
-  const [membershipPriceId, setMembershipPriceId] = useState("");
+  // Set of Price IDs the exec has ticked — stored as a comma-separated secret
+  const [selectedPriceIds, setSelectedPriceIds] = useState<Set<string>>(new Set());
   const [priceOptions, setPriceOptions] = useState<PriceOption[]>([]);
 
   // UI state
@@ -68,15 +72,19 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
   // ── Load saved secrets on mount ───────────────────────────────────────────
   useEffect(() => {
     async function loadSecrets() {
-      const [key, listId, priceId] = await Promise.all([
+      const [key, listId, priceIds] = await Promise.all([
         getSecret(SECRET_BREVO_API_KEY),
         getSecret(SECRET_BREVO_LIST_ID),
-        getSecret(SECRET_MEMBERSHIP_PRICE_ID),
+        getSecret(SECRET_MEMBERSHIP_PRICE_IDS),
       ]);
       // Mask the API key — show placeholder stars if one is already saved
       if (key) setBrevoApiKey("••••••••••••••••");
       if (listId) setBrevoListId(listId);
-      if (priceId) setMembershipPriceId(priceId);
+      if (priceIds) {
+        setSelectedPriceIds(
+          new Set(priceIds.split(",").map((id) => id.trim()).filter(Boolean))
+        );
+      }
       setLoadingSecrets(false);
     }
     loadSecrets();
@@ -136,7 +144,9 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
         saves.push(setSecret(SECRET_BREVO_API_KEY, brevoApiKey));
       }
       if (brevoListId) saves.push(setSecret(SECRET_BREVO_LIST_ID, brevoListId));
-      if (membershipPriceId) saves.push(setSecret(SECRET_MEMBERSHIP_PRICE_ID, membershipPriceId));
+      if (selectedPriceIds.size > 0) {
+        saves.push(setSecret(SECRET_MEMBERSHIP_PRICE_IDS, [...selectedPriceIds].join(",")));
+      }
 
       await Promise.all(saves);
       setSaveStatus("saved");
@@ -145,7 +155,7 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
     } finally {
       setSaving(false);
     }
-  }, [brevoApiKey, brevoListId, membershipPriceId, setSecret]);
+  }, [brevoApiKey, brevoListId, selectedPriceIds, setSecret]);
 
   // ── Test connection handler ───────────────────────────────────────────────
   const handleTest = useCallback(async () => {
@@ -259,39 +269,49 @@ export default function AppSettings({ userContext }: ExtensionContextValue) {
 
       <Divider />
 
-      {/* ── Membership product ── */}
+      {/* ── Synced prices ── */}
       <FormFieldGroup
-        legend="Membership purchase"
-        description="Choose which Stripe price triggers the Brevo sync. Only one-time prices are shown."
+        legend="Purchases that sync to Brevo"
+        description="Tick every price that should add someone to your Brevo members list — your annual membership now, event tickets later. Only one-time prices are shown."
       >
         {loadingPrices ? (
           <Spinner size="small" />
         ) : priceOptions.length > 0 ? (
-          <Select
-            label="Membership price"
-            value={membershipPriceId}
-            onChange={(e) => {
-              setMembershipPriceId(e.target.value);
-              setSaveStatus("idle");
-            }}
-          >
-            <option value="">— pick a price —</option>
+          <Box css={{ stack: "y", gap: "small" }}>
             {priceOptions.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
+              <Checkbox
+                key={opt.value}
+                label={opt.label}
+                checked={selectedPriceIds.has(opt.value)}
+                onChange={(e) => {
+                  setSelectedPriceIds((prev) => {
+                    const next = new Set(prev);
+                    if (e.target.checked) {
+                      next.add(opt.value);
+                    } else {
+                      next.delete(opt.value);
+                    }
+                    return next;
+                  });
+                  setSaveStatus("idle");
+                }}
+              />
             ))}
-          </Select>
+          </Box>
         ) : (
           <TextField
-            label="Membership price ID"
-            placeholder="price_…"
-            value={membershipPriceId}
+            label="Price IDs (comma-separated)"
+            placeholder="price_abc, price_def"
+            value={[...selectedPriceIds].join(", ")}
             onChange={(e) => {
-              setMembershipPriceId(e.target.value);
+              const ids = e.target.value
+                .split(",")
+                .map((id) => id.trim())
+                .filter(Boolean);
+              setSelectedPriceIds(new Set(ids));
               setSaveStatus("idle");
             }}
-            description="No active one-time prices found — paste the Price ID from your Stripe Dashboard."
+            description="No active one-time prices found — paste one or more Price IDs from your Stripe Dashboard, separated by commas."
           />
         )}
       </FormFieldGroup>
